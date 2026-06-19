@@ -255,18 +255,29 @@ export class IPCHandlers {
     this.sendProgress({ stage: 'vad', progress: 0, message: 'Starting processing' })
 
     try {
-      const settings = this.deps.settingsStore.get('diarization')
+      const diarizationSettings = this.deps.settingsStore.get('diarization')
+      const transcriptionSettings = this.deps.settingsStore.get('transcription')
+
+      const config = {
+        asr_model: transcriptionSettings.asrModel || 'faster-whisper',
+        use_vad: transcriptionSettings.useVAD !== false,
+        use_noise_reduction: transcriptionSettings.useNoiseReduction !== false,
+        initial_prompt: transcriptionSettings.initialPrompt || undefined,
+        language: transcriptionSettings.language || undefined
+      }
 
       let result: any
       try {
         result = await this.deps.sidecarManager.processMeeting(meeting.audioPath, {
-          language: options?.language,
-          maxSpeakers: options?.maxSpeakers || settings.maxSpeakers,
-          minSpeakers: options?.minSpeakers || settings.minSpeakers,
-          enableDiarization: options?.enableDiarization ?? settings.enabled,
+          language: options?.language || transcriptionSettings.language,
+          maxSpeakers: options?.maxSpeakers || diarizationSettings.maxSpeakers,
+          minSpeakers: options?.minSpeakers || diarizationSettings.minSpeakers,
+          enableDiarization: options?.enableDiarization ?? diarizationSettings.enabled,
           enableTranscription: options?.enableTranscription ?? true,
-          customVocabulary: options?.customVocabulary || []
-        })
+          customVocabulary: options?.customVocabulary || [],
+          model: transcriptionSettings.model,
+          computeType: transcriptionSettings.computeType
+        }, config)
       } catch (err) {
         this.sendProgress({ stage: 'error', progress: 0, message: String(err) })
         throw err

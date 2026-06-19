@@ -437,6 +437,68 @@ export function SettingsPage({ onBack }: Props) {
                     placeholder="en, zh, ja, es, fr, de..."
                   />
                 </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>ASR Model</label>
+                  <select
+                    style={styles.select}
+                    value={localSettings.transcription.asrModel}
+                    onChange={e => setLocalSettings({
+                      ...localSettings,
+                      transcription: { ...localSettings.transcription, asrModel: e.target.value as any }
+                    })}
+                  >
+                    <option value="faster-whisper">faster-whisper (large-v3-turbo) ✓</option>
+                    <option value="parakeet-tdt">parakeet-tdt-0.6b (more accurate, slower)</option>
+                  </select>
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.toggle}>
+                    <input
+                      type="checkbox"
+                      checked={localSettings.transcription.useVAD}
+                      onChange={e => setLocalSettings({
+                        ...localSettings,
+                        transcription: { ...localSettings.transcription, useVAD: e.target.checked }
+                      })}
+                    />
+                    <span>Filter non-speech (VAD)</span>
+                  </label>
+                  <p style={{ margin: '2px 0 0 24px', fontSize: 12, color: '#888' }}>
+                    Reduces hallucinations by filtering silence and background noise
+                  </p>
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.toggle}>
+                    <input
+                      type="checkbox"
+                      checked={localSettings.transcription.useNoiseReduction}
+                      onChange={e => setLocalSettings({
+                        ...localSettings,
+                        transcription: { ...localSettings.transcription, useNoiseReduction: e.target.checked }
+                      })}
+                    />
+                    <span>Noise reduction</span>
+                  </label>
+                  <p style={{ margin: '2px 0 0 24px', fontSize: 12, color: '#888' }}>
+                    Cleans audio before processing for better accuracy
+                  </p>
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>Context prompt (optional)</label>
+                  <textarea
+                    style={styles.textarea}
+                    value={localSettings.transcription.initialPrompt}
+                    onChange={e => setLocalSettings({
+                      ...localSettings,
+                      transcription: { ...localSettings.transcription, initialPrompt: e.target.value }
+                    })}
+                    placeholder="e.g. This is a business meeting about quarterly results..."
+                    rows={3}
+                  />
+                  <p style={{ margin: '2px 0 0', fontSize: 12, color: '#888' }}>
+                    Helps Whisper understand the meeting context
+                  </p>
+                </div>
               </div>
 
               <div style={styles.infoBox}>
@@ -651,6 +713,7 @@ const styles: Record<string, React.CSSProperties> = {
   label: { display: 'block', fontSize: 12, fontWeight: 500, color: '#555', marginBottom: 4 },
   input: { width: '100%', padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' },
   select: { width: '100%', padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13, background: '#fff', boxSizing: 'border-box' },
+  textarea: { width: '100%', padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' },
   toggle: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' },
   providerToggle: { marginBottom: 16 },
   testBtn: { padding: '8px 16px', background: '#f0f0f0', border: '1px solid #ccc', borderRadius: 6, cursor: 'pointer', fontSize: 13 },

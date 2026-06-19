@@ -99,6 +99,10 @@ export interface TranscriptionSettings {
   vadFilter: boolean
   vadThreshold: number
   chunkLength: number
+  asrModel: 'faster-whisper' | 'parakeet-tdt'
+  useVAD: boolean
+  useNoiseReduction: boolean
+  initialPrompt: string
 }
 
 export interface DiarizationSettings {

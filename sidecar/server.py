@@ -46,39 +46,44 @@ class SidecarServer:
     def handle_ping(self) -> str:
         return "pong"
 
+    def _ensure_processor(self, config: Dict[str, Any] = None):
+        config = config or {}
+        if self.processor is None:
+            self.processor = MeetingProcessor(config=config, progress_callback=self._progress_callback)
+        else:
+            # Re-init if config changed
+            for key in ('use_vad', 'use_noise_reduction', 'asr_model', 'initial_prompt', 'language'):
+                if key in config and config[key] != self.processor.config.get(key):
+                    self.processor = MeetingProcessor(config=config, progress_callback=self._progress_callback)
+                    break
+
     def handle_process_meeting(
         self,
         audio_path: str,
         options: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        if self.processor is None:
-            self.processor = MeetingProcessor(progress_callback=self._progress_callback)
-
         options = options or {}
+        config = options.get('config', {})
+        self._ensure_processor(config)
+
+        if self.processor.transcriber is None:
+            self.processor.initialize(
+                model_size=options.get("model_size", "large-v3-turbo"),
+                device=options.get("device", "auto")
+            )
+
         result = self.processor.process(audio_path, options)
         return self._result_to_dict(result)
 
     def handle_transcribe_file(self, audio_path: str, **kwargs) -> Dict[str, Any]:
-        if self.processor is None:
-            self.processor = MeetingProcessor(progress_callback=self._progress_callback)
+        config = kwargs.pop('config', {})
+        self._ensure_processor(config)
+
+        if self.processor.transcriber is None and 'parakeet' not in self.processor.asr_model:
             self.processor.initialize()
 
-        info, segments = self.processor._run_transcription(audio_path, kwargs.get("language"))
-        return {
-            "language": info.language,
-            "duration": info.duration,
-            "segments": [
-                {
-                    "id": s["id"],
-                    "start": s["start"],
-                    "end": s["end"],
-                    "text": s["text"],
-                    "confidence": s["confidence"],
-                    "words": s.get("words")
-                }
-                for s in segments
-            ]
-        }
+        result = self.processor.transcribe(audio_path)
+        return result
 
     def handle_diarize_file(self, audio_path: str, **kwargs) -> Dict[str, Any]:
         if self.processor is None:

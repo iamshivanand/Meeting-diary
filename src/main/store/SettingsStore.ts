@@ -20,7 +20,11 @@ function getDefaultSettings(): Settings {
       beamSize: 5,
       vadFilter: true,
       vadThreshold: 0.5,
-      chunkLength: 30
+      chunkLength: 30,
+      asrModel: 'faster-whisper',
+      useVAD: true,
+      useNoiseReduction: true,
+      initialPrompt: ''
     },
     diarization: {
       enabled: true,

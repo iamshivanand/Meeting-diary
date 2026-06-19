@@ -1,7 +1,10 @@
 import json
 import time
 import uuid
+import os
 import numpy as np
+import librosa
+import noisereduce as nr
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass, asdict
 
@@ -38,15 +41,135 @@ class MeetingResult:
     metadata: Dict[str, Any]
 
 
+class SileroVAD:
+    """Lightweight VAD using Silero model via onnx (no torch needed)"""
+
+    def __init__(self):
+        self.model = None
+
+    def _load_model(self):
+        if self.model is not None:
+            return
+        try:
+            import onnxruntime
+            model_path = os.path.join(os.path.dirname(__file__), "silero_vad.onnx")
+            if not os.path.exists(model_path):
+                import urllib.request
+                url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+                urllib.request.urlretrieve(url, model_path)
+            self.model = onnxruntime.InferenceSession(model_path)
+        except Exception as e:
+            print(f"  [VAD] Failed to load Silero ONNX model: {e}", flush=True)
+            self.model = None
+
+    def get_speech_timestamps(self, audio: np.ndarray, sr: int = 16000) -> list:
+        """Returns list of (start_sec, end_sec) speech segments"""
+        self._load_model()
+        if self.model is None:
+            duration = len(audio) / sr
+            return [(0.0, duration)]
+
+        window_size = 512
+        threshold = 0.5
+
+        speech_frames = []
+        for i in range(0, len(audio) - window_size, window_size):
+            chunk = audio[i:i + window_size].astype(np.float32)
+            if len(chunk) < window_size:
+                break
+            inputs = {self.model.get_inputs()[0].name: chunk.reshape(1, -1)}
+            outputs = self.model.run(None, inputs)
+            prob = float(outputs[0][0][0])
+            speech_frames.append(prob > threshold)
+
+        segments = []
+        in_speech = False
+        start_frame = 0
+        for idx, is_speech in enumerate(speech_frames):
+            if is_speech and not in_speech:
+                start_frame = idx
+                in_speech = True
+            elif not is_speech and in_speech:
+                end_sec = (idx * window_size) / sr
+                start_sec = (start_frame * window_size) / sr
+                if end_sec - start_sec > 0.3:
+                    segments.append((start_sec, end_sec))
+                in_speech = False
+
+        if in_speech:
+            start_sec = (start_frame * window_size) / sr
+            end_sec = len(audio) / sr
+            if end_sec - start_sec > 0.3:
+                segments.append((start_sec, end_sec))
+
+        return segments
+
+
+class ParakeetTDT:
+    """NVIDIA Parakeet TDT 0.6B ASR model via ONNX runtime"""
+
+    def __init__(self):
+        self.model = None
+        self.sample_rate = 16000
+
+    def _load_model(self):
+        if self.model is not None:
+            return
+        try:
+            import onnx_asr
+            self.model = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v2")
+            print("  [Parakeet] Model loaded successfully", flush=True)
+        except Exception as e:
+            print(f"  [Parakeet] Failed to load model: {e}", flush=True)
+            self.model = None
+
+    def transcribe(self, audio_path: str) -> tuple:
+        self._load_model()
+        if self.model is None:
+            raise RuntimeError("Parakeet model not available")
+
+        audio, sr = librosa.load(audio_path, sr=self.sample_rate, mono=True)
+        duration = len(audio) / sr
+
+        result = self.model.recognize(audio, return_timestamps=True)
+
+        if isinstance(result, str):
+            segments = [{'start': 0.0, 'end': duration, 'text': result.strip()}]
+        elif isinstance(result, list):
+            segments = []
+            for seg in result:
+                segments.append({
+                    'start': seg.get('start', 0),
+                    'end': seg.get('end', duration),
+                    'text': seg.get('text', '')
+                })
+        else:
+            segments = []
+
+        return segments, {'language': 'en', 'duration': duration}
+
+
 class MeetingProcessor:
     """Main pipeline for meeting transcription + diarization."""
 
-    def __init__(self, progress_callback: Optional[Callable] = None):
+    def __init__(self, config: dict = None, progress_callback: Optional[Callable] = None):
         self.progress_callback = progress_callback or self._default_progress
+        self.config = config or {}
+        self.use_vad = self.config.get('use_vad', True)
+        self.use_noise_reduction = self.config.get('use_noise_reduction', True)
+        self.asr_model = self.config.get('asr_model', 'faster-whisper')
+        self.initial_prompt = self.config.get('initial_prompt', None)
+        self.language = self.config.get('language', None)
+
         self.transcriber = None
         self.diarizer = None
         self.speaker_registry = None
         self.vad_model = None
+
+        self.vad = SileroVAD()
+        self.parakeet = None
+        if 'parakeet' in self.asr_model:
+            self.parakeet = ParakeetTDT()
 
     def initialize(self, model_size: str = "large-v3-turbo", device: str = "auto"):
         self._report_progress("initialization", 0, "Loading models...")
@@ -116,29 +239,16 @@ class MeetingProcessor:
             speaker_ids = list(set(d["speaker"] for d in diarization_segments))
             self._report_progress("diarization", 100, f"Diarization complete: {len(speaker_ids)} speakers found")
 
+        audio_duration = 0
         transcription_segments = []
         if enable_transcription:
             self._report_progress("transcription", 10, "Starting transcription...")
-            info, raw_segments = self._run_transcription(audio_path, language)
+            transcribe_result = self.transcribe(audio_path, language=language)
             self._report_progress("transcription", 90, "Aligning timestamps...")
 
-            language = info.language
-            transcription_segments = []
-            for i, seg in enumerate(raw_segments):
-                words_data = None
-                if seg.words:
-                    words_data = [
-                        {"word": w.word, "start": w.start, "end": w.end, "confidence": w.probability}
-                        for w in seg.words
-                    ]
-                transcription_segments.append({
-                    "id": str(uuid.uuid4()),
-                    "start": seg.start,
-                    "end": seg.end,
-                    "text": seg.text.strip(),
-                    "confidence": seg.avg_logprob if hasattr(seg, 'avg_logprob') else 0.0,
-                    "words": words_data
-                })
+            language = transcribe_result.get('language', 'en')
+            audio_duration = transcribe_result.get('duration', 0)
+            transcription_segments = transcribe_result.get('segments', [])
 
             self._report_progress("transcription", 100, f"Transcription complete: {len(transcription_segments)} segments")
 
@@ -192,7 +302,7 @@ class MeetingProcessor:
             speakers=speakers,
             metadata={
                 "language": language,
-                "duration": info.duration if hasattr(info, 'duration') else 0,
+                "duration": audio_duration,
                 "model": options.get("model_size", "large-v3-turbo"),
                 "processed_at": time.time()
             }
@@ -230,7 +340,7 @@ class MeetingProcessor:
 
         return segments
 
-    def _run_transcription(self, audio_path: str, language: Optional[str]):
+    def _transcribe_whisper(self, audio_path: str, language: Optional[str] = None):
         segments_gen, info = self.transcriber.transcribe(
             audio_path,
             language=language,
@@ -250,6 +360,100 @@ class MeetingProcessor:
 
         segments = list(segments_gen)
         return info, segments
+
+    def _transcribe_parakeet(self, audio_path: str, language: Optional[str] = None) -> tuple:
+        if self.parakeet is None:
+            raise RuntimeError("Parakeet model not available")
+        return self.parakeet.transcribe(audio_path)
+
+    def preprocess_audio(self, audio_path: str) -> tuple:
+        """Load and preprocess audio: noise reduction + normalization.
+        Returns (audio_array, sample_rate)"""
+        audio, sr = librosa.load(audio_path, sr=16000, mono=True)
+
+        if self.use_noise_reduction:
+            try:
+                audio = nr.reduce_noise(y=audio, sr=sr, prop_decrease=0.8)
+                print(f"  [Preprocess] Applied noise reduction", flush=True)
+            except Exception as e:
+                print(f"  [Preprocess] Noise reduction failed: {e}", flush=True)
+
+        max_val = np.max(np.abs(audio))
+        if max_val > 0:
+            audio = audio / max_val * 0.95
+
+        return audio, sr
+
+    def transcribe(self, audio_path: str, language: Optional[str] = None, progress_callback: Optional[Callable] = None) -> dict:
+        """Transcribe audio file using configured ASR model"""
+        language = language or self.language
+        audio, sr = self.preprocess_audio(audio_path)
+
+        preprocessed_path = audio_path + ".preprocessed.wav"
+        try:
+            import soundfile as sf
+            sf.write(preprocessed_path, audio, sr)
+        except Exception as e:
+            print(f"  [Transcribe] Failed to save preprocessed audio: {e}", flush=True)
+            preprocessed_path = audio_path
+
+        vad_segments = []
+        if self.use_vad:
+            vad_segments = self.vad.get_speech_timestamps(audio, sr)
+            print(f"  [VAD] Found {len(vad_segments)} speech segments", flush=True)
+
+        if 'parakeet' in self.asr_model and self.parakeet is not None:
+            segments, info = self._transcribe_parakeet(preprocessed_path)
+        else:
+            whisper_info, whisper_segments = self._transcribe_whisper(preprocessed_path, language)
+            segments = []
+            for seg in whisper_segments:
+                words_data = None
+                if seg.words:
+                    words_data = [
+                        {"word": w.word, "start": w.start, "end": w.end, "confidence": w.probability}
+                        for w in seg.words
+                    ]
+                segments.append({
+                    "id": str(uuid.uuid4()),
+                    "start": seg.start,
+                    "end": seg.end,
+                    "text": seg.text.strip(),
+                    "confidence": seg.avg_logprob if hasattr(seg, 'avg_logprob') else 0.0,
+                    "words": words_data
+                })
+            info = {'language': whisper_info.language, 'duration': whisper_info.duration}
+
+        if preprocessed_path != audio_path:
+            try:
+                os.remove(preprocessed_path)
+            except Exception:
+                pass
+
+        if self.use_vad and vad_segments:
+            filtered_segments = []
+            for seg in segments:
+                seg_start = seg.get('start', 0)
+                seg_end = seg.get('end', 0)
+                overlaps = False
+                for vs, ve in vad_segments:
+                    if seg_start < ve and seg_end > vs:
+                        overlaps = True
+                        break
+                if overlaps or (seg_end - seg_start) < 0.5:
+                    filtered_segments.append(seg)
+                else:
+                    print(f"  [VAD] Filtered segment: '{seg.get('text', '')[:30]}...'", flush=True)
+            segments = filtered_segments
+
+        return {
+            'segments': segments,
+            'language': info.get('language', 'en'),
+            'duration': info.get('duration', 0),
+        }
+
+    # Backward compatibility alias
+    _run_transcription = _transcribe_whisper
 
     def _merge_pipelines(
         self,

@@ -127,8 +127,8 @@ export class SidecarManager extends EventEmitter {
     })
   }
 
-  async processMeeting(audioPath: string, options: Record<string, unknown> = {}): Promise<unknown> {
-    return this.request('process_meeting', {
+  async processMeeting(audioPath: string, options: Record<string, unknown> = {}, config?: Record<string, unknown>): Promise<unknown> {
+    const params: Record<string, unknown> = {
       audio_path: audioPath,
       options: {
         language: options.language || null,
@@ -141,7 +141,11 @@ export class SidecarManager extends EventEmitter {
         compute_type: options.computeType || 'int8_float16',
         custom_vocabulary: options.customVocabulary || []
       }
-    })
+    }
+    if (config) {
+      params.config = config
+    }
+    return this.request('process_meeting', params)
   }
 
   async registerSpeaker(name: string, audioSamples: string[]): Promise<unknown> {
