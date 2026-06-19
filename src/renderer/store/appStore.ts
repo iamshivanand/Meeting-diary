@@ -10,11 +10,18 @@ interface UpdateProgress {
   transferred: number
 }
 
+type RecordingPhase = 'idle' | 'requesting-mic' | 'requesting-screen' | 'recording' | 'saving' | 'done' | 'error'
+
 interface AppState {
   meetings: Meeting[]
   currentMeeting: Meeting | null
   settings: Settings | null
   recordingStatus: RecordingStatus
+  recordingPhase: RecordingPhase
+  recordingDuration: number
+  recordingError: string | null
+  recordingTitle: string
+  stopRecordingFn: (() => void) | null
   processingProgress: ProcessingProgress | null
   modelDownloadStatus: 'idle' | 'downloading' | 'done' | 'error'
   modelDownloadProgress: ModelDownloadProgress | null
@@ -28,6 +35,12 @@ interface AppState {
   setCurrentMeeting: (meeting: Meeting | null) => void
   setSettings: (settings: Settings) => void
   setRecordingStatus: (status: RecordingStatus) => void
+  setRecordingPhase: (phase: RecordingPhase) => void
+  setRecordingDuration: (duration: number) => void
+  setRecordingError: (error: string | null) => void
+  setRecordingTitle: (title: string) => void
+  setStopRecordingFn: (fn: (() => void) | null) => void
+  stopRecording: () => void
   setProcessingProgress: (progress: ProcessingProgress | null) => void
   setModelDownloadStatus: (status: 'idle' | 'downloading' | 'done' | 'error') => void
   setModelDownloadProgress: (progress: ModelDownloadProgress | null) => void
@@ -48,6 +61,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentMeeting: null,
   settings: null,
   recordingStatus: { state: 'idle', duration: 0, audioLevel: 0, fileSize: 0, sampleRate: 16000, channels: 1 },
+  recordingPhase: 'idle',
+  recordingDuration: 0,
+  recordingError: null,
+  recordingTitle: '',
+  stopRecordingFn: null,
   processingProgress: null,
   modelDownloadStatus: 'idle',
   modelDownloadProgress: null,
@@ -61,6 +79,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCurrentMeeting: (meeting) => set({ currentMeeting: meeting }),
   setSettings: (settings) => set({ settings }),
   setRecordingStatus: (status) => set({ recordingStatus: status }),
+  setRecordingPhase: (phase) => set({ recordingPhase: phase }),
+  setRecordingDuration: (duration) => set({ recordingDuration: duration }),
+  setRecordingError: (error) => set({ recordingError: error }),
+  setRecordingTitle: (title) => set({ recordingTitle: title }),
+  setStopRecordingFn: (fn) => set({ stopRecordingFn: fn }),
+  stopRecording: () => {
+    const fn = get().stopRecordingFn
+    if (fn) fn()
+  },
   setProcessingProgress: (progress) => set({ processingProgress: progress }),
   setModelDownloadStatus: (status) => set({ modelDownloadStatus: status }),
   setModelDownloadProgress: (progress) => set({ modelDownloadProgress: progress }),

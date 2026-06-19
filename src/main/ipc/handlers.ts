@@ -31,6 +31,7 @@ export class IPCHandlers {
     this.registerSettingsHandlers()
     this.registerAIHandlers()
     this.registerModelHandlers()
+    this.registerBrowserRecordingHandlers()
     this.setupProgressForwarding()
   }
 
@@ -95,6 +96,30 @@ export class IPCHandlers {
       } catch (err) {
         throw new Error(`Failed to stop recording: ${err}`)
       }
+    })
+  }
+
+  private registerBrowserRecordingHandlers(): void {
+    ipcMain.handle('save-recording', async (_event, { buffer, filename }: { buffer: ArrayBuffer; filename: string }) => {
+      const filePath = await this.deps.audioRecorder.saveAudioFile(filename, buffer)
+      return filePath
+    })
+
+    ipcMain.handle('get-audio-url', async (_event, filePath: string) => {
+      return this.deps.audioRecorder.getAudioUrl(filePath)
+    })
+
+    ipcMain.handle('create-meeting-from-recording', async (_event, data: { title: string; audioFilePath: string; audioDuration: number }) => {
+      const meeting = await this.deps.meetingStore.createMeeting({
+        id: uuid(),
+        title: data.title,
+        audioPath: data.audioFilePath,
+        duration: data.audioDuration || 0,
+        status: 'recorded',
+        speakers: [],
+        segments: []
+      })
+      return meeting
     })
   }
 

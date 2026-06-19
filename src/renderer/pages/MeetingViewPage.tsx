@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
 import type { Meeting, MeetingSegment, Speaker, AIProvider } from '@shared/types'
 import { EnrollModal } from '../components/EnrollModal'
+import WaveSurfer from 'wavesurfer.js'
 
 interface Props {
   meetingId: string
@@ -18,6 +19,77 @@ export function MeetingViewPage({ meetingId, onBack }: Props) {
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [enrollModal, setEnrollModal] = useState<{ speakerId: string } | null>(null)
+
+  const waveformRef = useRef<HTMLDivElement>(null)
+  const wavesurferRef = useRef<WaveSurfer | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [playbackRate, setPlaybackRate] = useState(1)
+  const [volume, setVolume] = useState(1)
+
+  const formatAudioTime = (seconds: number): string => {
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    const s = Math.floor(seconds % 60)
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+
+  useEffect(() => {
+    if (!waveformRef.current || !meeting?.audioPath) return
+
+    window.api.getAudioUrl(meeting.audioPath).then(audioUrl => {
+      if (!waveformRef.current) return
+
+      const ws = WaveSurfer.create({
+        container: waveformRef.current,
+        waveColor: '#4f46e5',
+        progressColor: '#818cf8',
+        cursorColor: '#c7d2fe',
+        barWidth: 2,
+        barRadius: 3,
+        barGap: 2,
+        height: 80,
+        normalize: true,
+      })
+
+      ws.load(audioUrl)
+
+      ws.on('ready', () => {
+        setDuration(ws.getDuration())
+      })
+
+      ws.on('timeupdate', (time) => {
+        setCurrentTime(time)
+      })
+
+      ws.on('play', () => setIsPlaying(true))
+      ws.on('pause', () => setIsPlaying(false))
+
+      wavesurferRef.current = ws
+    })
+
+    return () => {
+      wavesurferRef.current?.destroy()
+      wavesurferRef.current = null
+    }
+  }, [meeting?.audioPath])
+
+  const togglePlay = () => {
+    wavesurferRef.current?.playPause()
+  }
+
+  const changeSpeed = (speed: number) => {
+    setPlaybackRate(speed)
+    wavesurferRef.current?.setPlaybackRate(speed)
+  }
+
+  const changeVolume = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value)
+    setVolume(v)
+    wavesurferRef.current?.setVolume(v)
+  }
 
   const loadMeeting = useCallback(async () => {
     setLoading(true)
@@ -115,6 +187,53 @@ export function MeetingViewPage({ meetingId, onBack }: Props) {
           </select>
         </div>
       </header>
+
+      {meeting.audioPath && (
+        <div style={styles.playerCard}>
+          <div ref={waveformRef} style={styles.waveform} />
+          <div style={styles.playerControls}>
+            <div style={styles.controlsLeft}>
+              <button style={styles.playBtn} onClick={togglePlay}>
+                {isPlaying ? '⏸' : '▶'}
+              </button>
+              <span style={styles.timeDisplay}>
+                {formatAudioTime(currentTime)} / {formatAudioTime(duration)}
+              </span>
+              <div style={styles.speedControl}>
+                {[0.5, 1, 1.5, 2].map(speed => (
+                  <button
+                    key={speed}
+                    style={{
+                      ...styles.speedBtn,
+                      background: playbackRate === speed ? '#4f46e5' : 'transparent',
+                      color: playbackRate === speed ? '#fff' : '#ccc',
+                    }}
+                    onClick={() => changeSpeed(speed)}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={styles.volumeControl}>
+              <span style={styles.volumeIcon}>{volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={volume}
+                onChange={changeVolume}
+                style={styles.volumeSlider}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!meeting.audioPath && (
+        <div style={styles.noAudio}>No recording available for this meeting.</div>
+      )}
 
       <div style={styles.layout}>
         <aside style={styles.speakerPanel}>
@@ -313,5 +432,60 @@ const styles: Record<string, React.CSSProperties> = {
   aiText: { fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', whiteSpace: 'pre-wrap', margin: 0 },
   aiPlaceholder: { color: '#999', fontSize: 13, textAlign: 'center', padding: 20 },
   aiNote: { fontSize: 11, color: '#bbb', marginTop: 8 },
-  loading: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#666' }
+  loading: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#666' },
+  playerCard: {
+    background: '#1e1e2e',
+    margin: '12px 24px',
+    borderRadius: 10,
+    padding: '16px 20px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+  },
+  waveform: { width: '100%' },
+  playerControls: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  controlsLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 14,
+  },
+  playBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: '50%',
+    border: '2px solid #818cf8',
+    background: 'transparent',
+    color: '#818cf8',
+    fontSize: 14,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.2s',
+  },
+  timeDisplay: { fontSize: 13, color: '#a0a0b8', fontVariantNumeric: 'tabular-nums' },
+  speedControl: { display: 'flex', gap: 4 },
+  speedBtn: {
+    padding: '3px 8px',
+    border: '1px solid #3d3d5c',
+    borderRadius: 4,
+    fontSize: 11,
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+  },
+  volumeControl: { display: 'flex', alignItems: 'center', gap: 6 },
+  volumeIcon: { fontSize: 14 },
+  volumeSlider: { width: 80, height: 4, accentColor: '#818cf8', cursor: 'pointer' },
+  noAudio: {
+    margin: '12px 24px',
+    padding: '20px',
+    background: '#1e1e2e',
+    borderRadius: 10,
+    textAlign: 'center',
+    color: '#888',
+    fontSize: 14,
+  },
 }

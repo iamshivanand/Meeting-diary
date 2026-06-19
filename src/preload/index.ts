@@ -83,6 +83,11 @@ const api = {
     segmentTopics: (meetingId: string) => ipcRenderer.invoke('ai:segment-topics', meetingId)
   },
 
+  saveRecording: (buffer: ArrayBuffer, filename: string) => ipcRenderer.invoke('save-recording', { buffer, filename }),
+  getAudioUrl: (filePath: string) => ipcRenderer.invoke('get-audio-url', filePath),
+  createMeetingFromRecording: (data: { title: string; audioFilePath: string; audioDuration: number }) =>
+    ipcRenderer.invoke('create-meeting-from-recording', data),
+
   models: {
     check: () => ipcRenderer.invoke('check-models'),
     download: () => ipcRenderer.invoke('download-models'),

@@ -11,6 +11,11 @@ export interface ElectronAPI {
   checkForUpdates: () => Promise<void>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+
+  saveRecording: (buffer: ArrayBuffer, filename: string) => Promise<string>
+  getAudioUrl: (filePath: string) => Promise<string>
+  createMeetingFromRecording: (data: { title: string; audioFilePath: string; audioDuration: number }) => Promise<any>
+
   meetings: {
     list: () => Promise<any[]>
     get: (id: string) => Promise<any | null>

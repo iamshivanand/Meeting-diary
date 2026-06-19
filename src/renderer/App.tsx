@@ -7,6 +7,62 @@ import { UpdateNotifier } from './components/UpdateNotifier'
 
 type Route = { page: 'dashboard' } | { page: 'meeting'; id: string } | { page: 'settings' }
 
+const recordingBarStyles = `
+@keyframes recording-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+`
+
+function RecordingBar() {
+  const recordingPhase = useAppStore(s => s.recordingPhase)
+  const recordingDuration = useAppStore(s => s.recordingDuration)
+  const stopRecording = useAppStore(s => s.stopRecording)
+
+  if (recordingPhase !== 'recording') return null
+
+  const formatTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    const s = Math.floor(seconds % 60)
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+
+  return (
+    <>
+      <style>{recordingBarStyles}</style>
+      <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+      background: '#e74c3c', color: '#fff',
+      padding: '10px 24px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: 14, boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{
+          width: 10, height: 10, borderRadius: '50%', background: '#fff',
+          display: 'inline-block', animation: 'recording-pulse 1s infinite'
+        }} />
+        <strong>Recording</strong>
+        <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{formatTime(recordingDuration)}</span>
+      </div>
+      <button
+        onClick={stopRecording}
+        style={{
+          padding: '6px 18px', background: 'rgba(255,255,255,0.2)',
+          color: '#fff', border: '2px solid #fff', borderRadius: 6,
+          cursor: 'pointer', fontSize: 13, fontWeight: 600
+        }}
+      >
+        Stop Recording
+      </button>
+    </div>
+    </>
+  )
+}
+
 function ModelDownloadBanner() {
   const modelDownloadStatus = useAppStore(s => s.modelDownloadStatus)
   const modelDownloadProgress = useAppStore(s => s.modelDownloadProgress)
@@ -122,6 +178,7 @@ export function App() {
 
   return (
     <>
+      <RecordingBar />
       <ModelDownloadBanner />
       {route.page === 'dashboard' && <DashboardPage onNavigate={setRoute} />}
       {route.page === 'meeting' && <MeetingViewPage meetingId={route.id} onBack={() => setRoute({ page: 'dashboard' })} />}

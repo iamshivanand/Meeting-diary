@@ -8,7 +8,7 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
     "build": "npm run build:renderer && npm run build:main && npm run build:preload && npm run build:resources && npm run build:sidecar",
-    "build:renderer": "vite build",
+    "build:renderer": "vite build --mode production",
     "build:main": "tsc -p tsconfig.main.json",
     "build:preload": "tsc -p tsconfig.preload.json",
     "build:resources": "node scripts/create-resources.js",
@@ -21,8 +21,8 @@
     "test:e2e:dev": "concurrently -k --success first \"npm run dev:vite\" \"wait-on tcp:5173 && npx playwright test --config tests/e2e/playwright.config.ts\"",
     "lint": "eslint src --ext ts,tsx",
     "start": "npm run build && electron .",
-    "pack": "cross-env SIGNTOOL_PATH=dummy npx electron-builder --dir",
-    "pack:dist": "cross-env SIGNTOOL_PATH=dummy npx electron-builder",
+    "pack": "npm run build && cross-env SIGNTOOL_PATH=dummy npx electron-builder --dir",
+    "pack:dist": "npm run build && cross-env SIGNTOOL_PATH=dummy npx electron-builder",
     "postinstall": "node scripts/install-native-deps.js"
   },
   "dependencies": {
@@ -34,6 +34,7 @@
     "react-dom": "^18.3.1",
     "sql.js": "1.10",
     "uuid": "^9.0.1",
+    "wavesurfer.js": "^7.12.8",
     "zod": "^3.22.4",
     "zustand": "^4.5.0"
   },
@@ -73,7 +74,12 @@
         "from": "sidecar/dist",
         "to": "sidecar",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/tests/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.pytest_cache/**",
+          "!**/benchmarks.py"
         ]
       }
     ],
@@ -91,7 +97,9 @@
       "icon": "resources/icons/icon.png",
       "signDlls": false,
       "signAndEditExecutable": false,
-      "publish": ["github"]
+      "publish": [
+        "github"
+      ]
     },
     "mac": {
       "target": [

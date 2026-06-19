@@ -6,6 +6,8 @@ export interface Meeting {
   duration: number
   status: 'recorded' | 'processing' | 'completed' | 'failed'
   audioPath?: string
+  audioFilePath?: string
+  audioDuration?: number
   transcriptPath?: string
   speakers: Speaker[]
   segments: MeetingSegment[]
@@ -289,4 +291,9 @@ export interface SpeakerEmbedding {
   speakerId: string
   embedding: number[]
   segments: DiarizationSegment[]
+}
+
+export interface RecordingOptions {
+  title: string
+  meetingDate?: string
 }

@@ -1,26 +1,96 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
-import type { Meeting, RecordingStatus } from '@shared/types'
+import type { Meeting } from '@shared/types'
 
 interface Props {
   onNavigate: (route: any) => void
 }
 
 export function DashboardPage({ onNavigate }: Props) {
-  const { meetings, recordingStatus, processingProgress, isLoading, loadMeetings, error } = useAppStore()
-  const [isRecording, setIsRecording] = useState(false)
-  const [recordingTitle, setRecordingTitle] = useState('')
+  const { meetings, recordingStatus, recordingPhase, processingProgress, isLoading, loadMeetings, error,
+    setRecordingPhase, setRecordingDuration, setRecordingError, setRecordingTitle, setStopRecordingFn,
+    recordingDuration } = useAppStore()
   const [showNewMeeting, setShowNewMeeting] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
+
+  const micStreamRef = useRef<MediaStream | null>(null)
+  const systemStreamRef = useRef<MediaStream | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const recorderStartTimeRef = useRef<number>(0)
+
+  const stopRecordingHandler = useCallback(async () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
+
+    micStreamRef.current?.getTracks().forEach(t => t.stop())
+    systemStreamRef.current?.getTracks().forEach(t => t.stop())
+    audioContextRef.current?.close()
+
+    micStreamRef.current = null
+    systemStreamRef.current = null
+    audioContextRef.current = null
+    mediaRecorderRef.current = null
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+
+    setStopRecordingFn(null)
+    setRecordingPhase('saving')
+
+    const chunks = chunksRef.current
+    chunksRef.current = []
+
+    if (chunks.length === 0) {
+      setRecordingPhase('idle')
+      setRecordingDuration(0)
+      setRecordingError('No audio data recorded')
+      return
+    }
+
+    try {
+      const blob = new Blob(chunks, { type: 'audio/webm' })
+      const arrayBuffer = await blob.arrayBuffer()
+      const timestamp = Date.now()
+      const filename = `recording-${timestamp}.webm`
+      const durationSec = (Date.now() - recorderStartTimeRef.current) / 1000
+
+      const filePath = await window.api.saveRecording(arrayBuffer, filename)
+
+      const meeting = await window.api.createMeetingFromRecording({
+        title: useAppStore.getState().recordingTitle || `Meeting ${new Date().toLocaleString()}`,
+        audioFilePath: filePath,
+        audioDuration: Math.round(durationSec)
+      })
+
+      setRecordingPhase('done')
+      setRecordingDuration(0)
+      setRecordingTitle('')
+
+      await loadMeetings()
+      onNavigate({ page: 'meeting', id: meeting.id })
+    } catch (err) {
+      console.error('Failed to save recording:', err)
+      setRecordingPhase('error')
+      setRecordingError(String(err))
+    }
+  }, [loadMeetings, onNavigate, setRecordingPhase, setRecordingDuration, setRecordingError, setRecordingTitle, setStopRecordingFn])
 
   useEffect(() => {
     loadMeetings()
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      if (timerRef.current) clearInterval(timerRef.current)
     }
   }, [loadMeetings])
 
@@ -36,37 +106,73 @@ export function DashboardPage({ onNavigate }: Props) {
   const failedRecordings = meetings.filter(m => m.status === 'failed')
 
   const handleStartRecording = async () => {
-    try {
-      const meeting = await window.api.meetings.create({
-        title: recordingTitle || `Meeting ${new Date().toLocaleString()}`,
-        duration: 0,
-        metadata: { platform: 'unknown' }
-      })
-      await window.api.meetings.startRecording(meeting.id)
-      setIsRecording(true)
-      setShowNewMeeting(false)
-      setRecordingTitle('')
+    const title = useAppStore.getState().recordingTitle || `Meeting ${new Date().toLocaleString()}`
+    setRecordingTitle(title)
 
-      intervalRef.current = setInterval(() => {
-        useAppStore.getState().loadMeetings()
-      }, 2000)
-    } catch (err) {
-      console.error('Failed to start recording:', err)
-      setNotification(`Recording failed: ${err}`)
-    }
-  }
-
-  const handleStopRecording = async (meetingId: string) => {
     try {
-      await window.api.meetings.stopRecording(meetingId)
-      setIsRecording(false)
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
+      setRecordingPhase('requesting-mic')
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      micStreamRef.current = micStream
+
+      setRecordingPhase('requesting-screen')
+      const systemStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      systemStreamRef.current = systemStream
+
+      systemStream.getVideoTracks().forEach(t => t.stop())
+
+      const audioContext = new AudioContext({ sampleRate: 16000 })
+      audioContextRef.current = audioContext
+
+      const dest = audioContext.createMediaStreamDestination()
+      const micSource = audioContext.createMediaStreamSource(micStream)
+      const sysSource = audioContext.createMediaStreamSource(systemStream)
+      micSource.connect(dest)
+      sysSource.connect(dest)
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : 'audio/mp4'
+
+      chunksRef.current = []
+      const mediaRecorder = new MediaRecorder(dest.stream, { mimeType })
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data)
       }
-      await loadMeetings()
-    } catch (err) {
-      console.error('Failed to stop recording:', err)
+      mediaRecorder.start(100)
+      mediaRecorderRef.current = mediaRecorder
+
+      recorderStartTimeRef.current = Date.now()
+      setRecordingPhase('recording')
+      setShowNewMeeting(false)
+
+      timerRef.current = setInterval(() => {
+        const elapsed = (Date.now() - recorderStartTimeRef.current) / 1000
+        setRecordingDuration(elapsed)
+      }, 200)
+
+      setStopRecordingFn(() => stopRecordingHandler)
+    } catch (err: any) {
+      console.error('Failed to start recording:', err)
+
+      if (err.name === 'NotAllowedError' || err.name === 'NotFoundError') {
+        setRecordingError(`Permission denied: ${err.message}`)
+      } else if (err.name === 'NotReadableError') {
+        setRecordingError(`Hardware error: ${err.message}`)
+      } else {
+        setRecordingError(`Recording failed: ${err.message || String(err)}`)
+      }
+
+      micStreamRef.current?.getTracks().forEach(t => t.stop())
+      micStreamRef.current = null
+      systemStreamRef.current?.getTracks().forEach(t => t.stop())
+      systemStreamRef.current = null
+      audioContextRef.current?.close()
+      audioContextRef.current = null
+
+      setRecordingPhase('error')
+      setNotification(`Recording failed: ${err.message || String(err)}`)
     }
   }
 
@@ -102,11 +208,24 @@ export function DashboardPage({ onNavigate }: Props) {
       </header>
 
       <div style={styles.statusBar}>
-        <span style={{ ...styles.statusDot, background: isRecording ? '#e74c3c' : '#27ae60' }} />
-        <span>{isRecording ? 'Recording' : 'Ready'}</span>
-        {isRecording && (
+        <span style={{
+          ...styles.statusDot,
+          background: recordingPhase === 'recording' ? '#e74c3c' :
+                      recordingPhase === 'requesting-mic' || recordingPhase === 'requesting-screen' ? '#f39c12' :
+                      recordingPhase === 'saving' ? '#3498db' :
+                      '#27ae60'
+        }} />
+        <span>
+          {recordingPhase === 'recording' ? 'Recording' :
+           recordingPhase === 'requesting-mic' ? 'Requesting mic...' :
+           recordingPhase === 'requesting-screen' ? 'Select screen/window...' :
+           recordingPhase === 'saving' ? 'Saving...' :
+           recordingPhase === 'error' ? 'Error' :
+           'Ready'}
+        </span>
+        {recordingPhase === 'recording' && (
           <span style={styles.recordingTime}>
-            {formatTime(recordingStatus.duration)}
+            {formatTime(recordingDuration)}
           </span>
         )}
         {processingProgress && (
@@ -131,36 +250,44 @@ export function DashboardPage({ onNavigate }: Props) {
             <input
               style={styles.input}
               placeholder="Meeting title (optional)"
-              value={recordingTitle}
+              value={useAppStore.getState().recordingTitle}
               onChange={e => setRecordingTitle(e.target.value)}
               autoFocus
             />
             <div style={styles.cardActions}>
               <button style={styles.cancelBtn} onClick={() => setShowNewMeeting(false)}>Cancel</button>
-              <button style={styles.recordBtn} onClick={handleStartRecording}>Start Recording</button>
+              <button
+                style={styles.recordBtn}
+                onClick={handleStartRecording}
+                disabled={recordingPhase === 'requesting-mic' || recordingPhase === 'requesting-screen'}
+              >
+                Start Recording
+              </button>
             </div>
           </div>
         </div>
       )}
 
       <main style={styles.main}>
-        {!isRecording && (
+        {recordingPhase === 'idle' && recordingPhase !== 'recording' && recordingPhase !== 'saving' && (
           <button style={styles.newRecordBtn} onClick={() => setShowNewMeeting(true)}>
             + New Recording
           </button>
         )}
 
-        {isRecording && (
+        {recordingPhase === 'recording' && (
           <div style={styles.recordingCard}>
             <h3>Recording in progress...</h3>
-            <p>Duration: {formatTime(recordingStatus.duration)}</p>
-            <p>Audio level: {Math.round(recordingStatus.audioLevel * 100)}%</p>
-            <button style={styles.stopBtn} onClick={() => {
-              const active = meetings.find(m => m.status === 'recorded' || m.status === 'processing')
-              if (active) handleStopRecording(active.id)
-            }}>
+            <p>Duration: {formatTime(recordingDuration)}</p>
+            <button style={styles.stopBtn} onClick={stopRecordingHandler}>
               Stop Recording
             </button>
+          </div>
+        )}
+
+        {recordingPhase === 'saving' && (
+          <div style={styles.recordingCard}>
+            <h3>Saving recording...</h3>
           </div>
         )}
 

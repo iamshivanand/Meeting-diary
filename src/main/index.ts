@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, protocol, net } from 'electron'
 import { join } from 'path'
 import { SidecarManager } from './sidecar/SidecarManager'
 import { AudioRecorder } from './audio/AudioRecorder'
@@ -15,6 +15,10 @@ let settingsStore: SettingsStore
 let meetingStore: MeetingStore
 let ipcHandlers: IPCHandlers
 let modelsDownloaded = false
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'audio', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
+])
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -81,10 +85,19 @@ async function initializeApp() {
   })
 }
 
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'audio', privileges: { supportFetchAPI: true, bypassCSP: true } }
+])
+
 app.whenReady().then(async () => {
   try {
     await initializeApp()
     await createWindow()
+
+    protocol.handle('audio', (request) => {
+      const filePath = decodeURIComponent(request.url.slice('audio://'.length))
+      return net.fetch('file:///' + filePath.replace(/\\/g, '/'))
+    })
 
     // --- Keyboard Shortcuts ---
     // CmdOrCtrl+Shift+R - Start/Stop recording (toggle)
@@ -139,6 +152,12 @@ app.whenReady().then(async () => {
         autoUpdater.checkForUpdates()
       }, 5000)
     }
+
+    // Register custom protocol for audio playback
+    protocol.handle('audio', (request) => {
+      const filePath = decodeURIComponent(request.url.slice('audio://'.length))
+      return net.fetch('file:///' + filePath)
+    })
 
     // Auto-download ML models on first launch
     autoDownloadModels()
