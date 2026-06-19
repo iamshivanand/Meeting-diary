@@ -1,0 +1,26 @@
+node_modules/
+dist/
+release/
+coverage/
+playwright-report/
+test-results/
+
+sidecar/dist/
+sidecar/data/
+sidecar/__pycache__/
+sidecar/**/__pycache__/
+sidecar/**/*.pyc
+sidecar/**/.pytest_cache/
+
+native/**/build/
+native/**/node_modules/
+native/**/*.node
+
+
+.env
+*.log
+.DS_Store
+Thumbs.db
+
+# User data
+meetings/

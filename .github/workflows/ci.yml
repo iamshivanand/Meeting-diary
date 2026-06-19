@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-typecheck:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit -p tsconfig.main.json
+      - run: npx tsc --noEmit -p tsconfig.preload.json
+
+  security-scan:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  unit-tests:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx vitest run --reporter=verbose
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+
+  py-lint:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install ruff
+      - run: pip install -r sidecar/requirements.txt --no-deps --quiet 2>/dev/null || true
+      - run: ruff check sidecar/ --ignore=E402,F401
+
+  py-tests:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install pytest numpy
+      - run: cd sidecar && python -m pytest tests/ -v
+
+  e2e-tests:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    needs: [unit-tests, py-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx playwright install chromium
+      - run: |
+          npm run build:renderer
+          npm run build:main
+          npm run build:preload
+          node scripts/create-resources.js
+      - run: npx playwright test --config tests/e2e/playwright.config.ts --retries=2
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-screenshots
+          path: playwright-report/
+
+  build:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, security-scan, unit-tests, py-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: npm ci
+      - run: pip install -r sidecar/requirements.txt --no-deps --quiet 2>/dev/null || true
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+  accuracy-benchmark:
+    timeout-minutes: 60
+    runs-on: [self-hosted, gpu]
+    if: github.ref == 'refs/heads/main'
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r sidecar/requirements.txt
+      - run: python -m pytest sidecar/tests/benchmarks.py -v --benchmark-json=reports/accuracy.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-report
+          path: reports/accuracy.json
