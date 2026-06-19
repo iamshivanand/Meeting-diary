@@ -9,6 +9,7 @@ export interface Meeting {
   audioFilePath?: string
   audioDuration?: number
   transcriptPath?: string
+  tags?: string[]
   speakers: Speaker[]
   segments: MeetingSegment[]
   metadata: MeetingMetadata
@@ -300,4 +301,21 @@ export interface SpeakerEmbedding {
 export interface RecordingOptions {
   title: string
   meetingDate?: string
+}
+
+export interface SearchResult {
+  meetingId: string;
+  meetingTitle: string;
+  meetingDate: string;
+  segmentIndex: number;
+  speaker: string;
+  text: string;
+  start: number;
+  end: number;
+  highlight?: string;
+}
+
+export interface SearchQuery {
+  query: string;
+  limit?: number;
 }

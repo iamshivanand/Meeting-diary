@@ -19,6 +19,11 @@ export function MeetingViewPage({ meetingId, onBack }: Props) {
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [enrollModal, setEnrollModal] = useState<{ speakerId: string } | null>(null)
+  const [tagInput, setTagInput] = useState('')
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [showTagSuggestions, setShowTagSuggestions] = useState(false)
+  const [showExportMenu, setShowExportMenu] = useState(false)
+  const exportRef = useRef<HTMLDivElement>(null)
 
   const waveformRef = useRef<HTMLDivElement>(null)
   const wavesurferRef = useRef<WaveSurfer | null>(null)
@@ -100,6 +105,10 @@ export function MeetingViewPage({ meetingId, onBack }: Props) {
 
   useEffect(() => { loadMeeting() }, [loadMeeting])
 
+  useEffect(() => {
+    window.api.meetings.getAllTags().then(setAllTags).catch(() => {})
+  }, [])
+
   const handleRenameSpeaker = async (speakerId: string, newLabel: string) => {
     if (!meeting) return
     await window.api.speakers.update(meeting.id, speakerId, { label: newLabel })
@@ -153,6 +162,61 @@ export function MeetingViewPage({ meetingId, onBack }: Props) {
     }
   }
 
+  const handleExportTranscript = async (format: string) => {
+    if (!meeting) return
+    try {
+      const path = await window.api.exportTranscript(meeting, format)
+      if (path) alert(`Exported to: ${path}`)
+    } catch (err) {
+      alert(`Export failed: ${err}`)
+    }
+    setShowExportMenu(false)
+  }
+
+  const handleAddTag = async (tag: string) => {
+    if (!meeting) return
+    const clean = tag.trim().toLowerCase().replace(/\s+/g, '-')
+    if (!clean || meeting.tags?.includes(clean)) return
+    const newTags = [...(meeting.tags || []), clean]
+    await window.api.meetings.updateMeetingTags(meeting.id, newTags)
+    setMeeting({ ...meeting, tags: newTags })
+    setTagInput('')
+    setShowTagSuggestions(false)
+    const updated = await window.api.meetings.getAllTags()
+    setAllTags(updated)
+  }
+
+  const handleRemoveTag = async (tag: string) => {
+    if (!meeting) return
+    const newTags = (meeting.tags || []).filter(t => t !== tag)
+    await window.api.meetings.updateMeetingTags(meeting.id, newTags)
+    setMeeting({ ...meeting, tags: newTags })
+    const updated = await window.api.meetings.getAllTags()
+    setAllTags(updated)
+  }
+
+  const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && tagInput.trim()) {
+      handleAddTag(tagInput)
+    } else if (e.key === 'Enter' && tagInput.includes(',')) {
+      const parts = tagInput.split(',').map(t => t.trim()).filter(Boolean)
+      parts.forEach(p => handleAddTag(p))
+    }
+  }
+
+  useEffect(() => {
+    if (!showExportMenu) return
+    const handleClick = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setShowExportMenu(false)
+      }
+    }
+    document.addEventListener('click', handleClick)
+    return () => document.removeEventListener('click', handleClick)
+  }, [showExportMenu])
+
+  const suggestedTags = allTags.filter(t => !meeting?.tags?.includes(t))
+
   if (loading) return <div style={styles.loading}>Loading meeting...</div>
   if (!meeting) return <div style={styles.loading}>Meeting not found</div>
 
@@ -185,8 +249,59 @@ export function MeetingViewPage({ meetingId, onBack }: Props) {
             <option value="srt">SRT</option>
             <option value="vtt">VTT</option>
           </select>
+          <div ref={exportRef} style={{ position: 'relative', display: 'inline-block' }}>
+            <button style={styles.exportBtn} onClick={() => setShowExportMenu(!showExportMenu)}>
+              Export ▼
+            </button>
+            {showExportMenu && (
+              <div style={styles.exportMenu}>
+                <div style={styles.exportMenuItem} onClick={() => handleExportTranscript('docx')}>Word (DOCX)</div>
+                <div style={styles.exportMenuItem} onClick={() => handleExportTranscript('srt')}>SubRip (SRT)</div>
+                <div style={styles.exportMenuItem} onClick={() => handleExportTranscript('md')}>Markdown (MD)</div>
+                <div style={styles.exportMenuItem} onClick={() => handleExportTranscript('json')}>JSON</div>
+                <div style={styles.exportMenuItem} onClick={() => handleExportTranscript('txt')}>Plain Text</div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
+
+      <div style={styles.tagsSection}>
+        {(meeting.tags || []).map(tag => (
+          <span key={tag} style={styles.tagChip}>
+            {tag}
+            <button style={styles.tagRemoveBtn} onClick={() => handleRemoveTag(tag)}>×</button>
+          </span>
+        ))}
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <input
+            style={styles.tagInput}
+            placeholder="Add tag..."
+            value={tagInput}
+            onChange={e => {
+              setTagInput(e.target.value)
+              if (e.target.value.includes(',')) {
+                const parts = e.target.value.split(',').map(t => t.trim()).filter(Boolean)
+                parts.forEach(p => handleAddTag(p))
+              } else {
+                setShowTagSuggestions(e.target.value.length > 0)
+              }
+            }}
+            onKeyDown={handleTagKeyDown}
+            onFocus={() => setShowTagSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowTagSuggestions(false), 200)}
+          />
+          {showTagSuggestions && suggestedTags.filter(t => t.includes(tagInput.toLowerCase())).length > 0 && (
+            <div style={styles.tagSuggestions}>
+              {suggestedTags.filter(t => t.includes(tagInput.toLowerCase())).map(t => (
+                <div key={t} style={styles.tagSuggestionItem} onMouseDown={() => handleAddTag(t)}>
+                  {t}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       {meeting.audioPath && (
         <div style={styles.playerCard}>
@@ -400,6 +515,9 @@ const styles: Record<string, React.CSSProperties> = {
   title: { margin: 0, fontSize: 18, fontWeight: 600, flex: 1 },
   headerActions: { display: 'flex', gap: 8 },
   exportSelect: { padding: '6px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13, cursor: 'pointer' },
+  exportBtn: { padding: '6px 12px', background: '#3498db', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' },
+  exportMenu: { position: 'absolute', top: '100%', right: 0, background: '#fff', border: '1px solid #e0e0e0', borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100, minWidth: 160, marginTop: 4 },
+  exportMenuItem: { padding: '8px 14px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #f0f0f0', whiteSpace: 'nowrap' },
   layout: { display: 'flex', height: 'calc(100vh - 55px)' },
   speakerPanel: { width: 240, background: '#fff', borderRight: '1px solid #e0e0e0', padding: 16, overflowY: 'auto', flexShrink: 0 },
   panelTitle: { fontSize: 14, fontWeight: 600, marginBottom: 12, marginTop: 0 },
@@ -432,6 +550,12 @@ const styles: Record<string, React.CSSProperties> = {
   aiText: { fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', whiteSpace: 'pre-wrap', margin: 0 },
   aiPlaceholder: { color: '#999', fontSize: 13, textAlign: 'center', padding: 20 },
   aiNote: { fontSize: 11, color: '#bbb', marginTop: 8 },
+  tagsSection: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, padding: '8px 24px', background: '#fff', borderBottom: '1px solid #e0e0e0' },
+  tagChip: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', background: '#e8f0fe', color: '#1a73e8', borderRadius: 12, fontSize: 12, fontWeight: 500 },
+  tagRemoveBtn: { background: 'none', border: 'none', color: '#1a73e8', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1, opacity: 0.7 },
+  tagInput: { padding: '4px 10px', border: '1px solid #ccc', borderRadius: 12, fontSize: 12, outline: 'none', minWidth: 100 },
+  tagSuggestions: { position: 'absolute', top: '100%', left: 0, background: '#fff', border: '1px solid #e0e0e0', borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100, maxHeight: 150, overflowY: 'auto', minWidth: 120 },
+  tagSuggestionItem: { padding: '6px 12px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f0f0f0' },
   loading: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#666' },
   playerCard: {
     background: '#1e1e2e',

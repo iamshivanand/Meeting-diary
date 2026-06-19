@@ -2,7 +2,7 @@ import initSqlJs, { Database as SqlJsDatabase } from 'sql.js'
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { v4 as uuid } from 'uuid'
-import type { Meeting, MeetingSegment, Speaker, MeetingMetadata, ActionItem, Decision, TopicSegment, ChatMessage } from '../../shared/types'
+import type { Meeting, MeetingSegment, Speaker, MeetingMetadata, ActionItem, Decision, TopicSegment, ChatMessage, SearchResult } from '../../shared/types'
 
 export class MeetingStore {
   private db: SqlJsDatabase | null = null
@@ -43,6 +43,7 @@ export class MeetingStore {
         status TEXT NOT NULL DEFAULT 'recorded',
         audio_path TEXT,
         transcript_path TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
         metadata TEXT NOT NULL DEFAULT '{}'
       )
     `)
@@ -100,6 +101,10 @@ export class MeetingStore {
     this.db.run('CREATE INDEX IF NOT EXISTS idx_segments_meeting ON segments(meeting_id)')
     this.db.run('CREATE INDEX IF NOT EXISTS idx_segments_speaker ON segments(speaker_id)')
     this.db.run('CREATE INDEX IF NOT EXISTS idx_speakers_meeting ON speakers(meeting_id)')
+    const cols = this.db.exec("PRAGMA table_info('meetings')")[0]?.values.map(v => v[1]) || []
+    if (!cols.includes('tags')) {
+      this.db.run("ALTER TABLE meetings ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+    }
     this.save()
   }
 
@@ -190,11 +195,30 @@ export class MeetingStore {
     if (data.audioPath !== undefined) { fields.push('audio_path = ?'); values.push(data.audioPath) }
     if (data.transcriptPath !== undefined) { fields.push('transcript_path = ?'); values.push(data.transcriptPath) }
     if (data.metadata !== undefined) { fields.push('metadata = ?'); values.push(JSON.stringify(data.metadata)) }
+    if (data.tags !== undefined) { fields.push('tags = ?'); values.push(JSON.stringify(data.tags)) }
     fields.push('updated_at = ?'); values.push(Date.now())
     values.push(id)
 
     db.run(`UPDATE meetings SET ${fields.join(', ')} WHERE id = ?`, values as any[])
     this.save()
+  }
+
+  async updateMeetingTags(id: string, tags: string[]): Promise<void> {
+    return this.updateMeeting(id, { tags })
+  }
+
+  async getAllTags(): Promise<string[]> {
+    const meetings = await this.listMeetings()
+    const tagSet = new Set<string>()
+    for (const m of meetings) {
+      if (m.tags) m.tags.forEach(t => tagSet.add(t))
+    }
+    return Array.from(tagSet).sort()
+  }
+
+  async getMeetingsByTag(tag: string): Promise<Meeting[]> {
+    const meetings = await this.listMeetings()
+    return meetings.filter(m => m.tags?.includes(tag))
   }
 
   async deleteMeeting(id: string): Promise<void> {
@@ -333,6 +357,7 @@ export class MeetingStore {
       status: meeting.status as Meeting['status'],
       audioPath: meeting.audio_path as string | undefined,
       transcriptPath: meeting.transcript_path as string | undefined,
+      tags: meeting.tags ? JSON.parse(meeting.tags as string) as string[] : undefined,
       metadata: JSON.parse(meeting.metadata as string || '{}') as MeetingMetadata,
       segments: segments.map(s => ({
         id: s.id as string,
@@ -361,6 +386,53 @@ export class MeetingStore {
         chatHistory: aiResults.chat_history ? JSON.parse(aiResults.chat_history as string) as ChatMessage[] : undefined
       } : undefined
     }
+  }
+
+  async searchTranscripts(query: string, limit: number = 50): Promise<SearchResult[]> {
+    const db = await this.ensureDb()
+    const escaped = query.replace(/[\\%_]/g, '\\$&')
+    const stmt = db.prepare(`
+      SELECT m.id, m.title, m.created_at,
+             s.id as segment_id, s.speaker_id, s.speaker_label, s.text, s.start_time, s.end_time
+      FROM meetings m
+      JOIN segments s ON s.meeting_id = m.id
+      WHERE s.text LIKE ? ESCAPE '\\'
+      ORDER BY m.created_at DESC
+      LIMIT ?
+    `)
+    stmt.bind([`%${escaped}%`, limit])
+    const results: SearchResult[] = []
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as Record<string, unknown>
+      results.push({
+        meetingId: row.id as string,
+        meetingTitle: row.title as string,
+        meetingDate: new Date(row.created_at as number).toISOString(),
+        segmentIndex: results.length,
+        speaker: (row.speaker_label as string) || (row.speaker_id as string) || 'Unknown',
+        text: row.text as string,
+        start: row.start_time as number,
+        end: row.end_time as number,
+      })
+    }
+    stmt.free()
+    return results
+  }
+
+  async getAllMeetingTitles(): Promise<Array<{ id: string; title: string; date: string }>> {
+    const db = await this.ensureDb()
+    const stmt = db.prepare('SELECT id, title, created_at FROM meetings ORDER BY created_at DESC')
+    const results: Array<{ id: string; title: string; date: string }> = []
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as Record<string, unknown>
+      results.push({
+        id: row.id as string,
+        title: row.title as string,
+        date: new Date(row.created_at as number).toISOString(),
+      })
+    }
+    stmt.free()
+    return results
   }
 
   close(): void {

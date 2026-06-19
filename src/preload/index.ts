@@ -33,7 +33,10 @@ const api = {
     stopRecording: (meetingId: string) => ipcRenderer.invoke('meetings:stop-recording', meetingId),
     processRecording: (meetingId: string, options?: any) =>
       ipcRenderer.invoke('meetings:process-recording', meetingId, options),
-    export: (meetingId: string, format: any) => ipcRenderer.invoke('meetings:export', meetingId, format)
+    export: (meetingId: string, format: any) => ipcRenderer.invoke('meetings:export', meetingId, format),
+    updateMeetingTags: (id: string, tags: string[]) =>
+      ipcRenderer.invoke('update-meeting-tags', { id, tags }),
+    getAllTags: () => ipcRenderer.invoke('get-all-tags'),
   },
 
   recording: {
@@ -96,7 +99,13 @@ const api = {
       ipcRenderer.on('model-download-progress', handler)
       return () => ipcRenderer.removeListener('model-download-progress', handler)
     }
-  }
+  },
+
+  searchTranscripts: (query: string, limit?: number) =>
+    ipcRenderer.invoke('search-transcripts', query, limit),
+  getAllMeetingTitles: () => ipcRenderer.invoke('get-all-meeting-titles'),
+  exportTranscript: (meeting: any, format: string) =>
+    ipcRenderer.invoke('export-transcript', { meeting, format }),
 }
 
 contextBridge.exposeInMainWorld('api', api)

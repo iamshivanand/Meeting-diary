@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
-import type { Meeting } from '@shared/types'
+import type { Meeting, SearchResult } from '@shared/types'
 
 interface Props {
   onNavigate: (route: any) => void
@@ -11,7 +11,13 @@ export function DashboardPage({ onNavigate }: Props) {
     setRecordingPhase, setRecordingDuration, setRecordingError, setRecordingTitle, setStopRecordingFn,
     recordingDuration } = useAppStore()
   const [showNewMeeting, setShowNewMeeting] = useState(false)
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [notification, setNotification] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const searchRef = useRef<HTMLDivElement>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -88,6 +94,7 @@ export function DashboardPage({ onNavigate }: Props) {
 
   useEffect(() => {
     loadMeetings()
+    window.api.meetings.getAllTags().then(setAllTags).catch(() => {})
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
       if (timerRef.current) clearInterval(timerRef.current)
@@ -100,6 +107,35 @@ export function DashboardPage({ onNavigate }: Props) {
       return () => clearTimeout(t)
     }
   }, [notification])
+
+  useEffect(() => {
+    if (searchQuery.length < 2) {
+      setSearchResults([])
+      return
+    }
+    setIsSearching(true)
+    const timer = setTimeout(async () => {
+      try {
+        const results = await window.api.searchTranscripts(searchQuery, 20)
+        setSearchResults(results)
+      } catch (err) {
+        console.error('Search failed:', err)
+      }
+      setIsSearching(false)
+    }, 300)
+    return () => { clearTimeout(timer); setIsSearching(false) }
+  }, [searchQuery])
+
+  useEffect(() => {
+    if (searchResults.length === 0) return
+    const handleClick = (e: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchResults([])
+      }
+    }
+    document.addEventListener('click', handleClick)
+    return () => document.removeEventListener('click', handleClick)
+  }, [searchResults.length])
 
   const activeRecordings = meetings.filter(m => m.status === 'recorded' || m.status === 'processing')
   const completedRecordings = meetings.filter(m => m.status === 'completed')
@@ -291,39 +327,118 @@ export function DashboardPage({ onNavigate }: Props) {
           </div>
         )}
 
+        <div ref={searchRef} style={styles.searchContainer}>
+          <div style={styles.searchInputWrapper}>
+            <span style={styles.searchIcon}>🔍</span>
+            <input
+              style={styles.searchInput}
+              placeholder="Search transcripts..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                style={styles.searchClearBtn}
+                onClick={() => { setSearchQuery(''); setSearchResults([]) }}
+              >
+                ✕
+              </button>
+            )}
+            {isSearching && <span style={styles.searchSpinner}>...</span>}
+          </div>
+          {searchResults.length > 0 && (
+            <div style={styles.searchResultsDropdown}>
+              {searchResults.map((r, i) => (
+                <div
+                  key={`${r.meetingId}-${i}`}
+                  style={styles.searchResultItem}
+                  onClick={() => {
+                    onNavigate({ page: 'meeting', id: r.meetingId })
+                    setSearchQuery('')
+                    setSearchResults([])
+                  }}
+                >
+                  <div style={styles.searchResultTitle}>{r.meetingTitle}</div>
+                  <div style={styles.searchResultSpeaker}>{r.speaker}</div>
+                  <div style={styles.searchResultText}>
+                    {r.text.length > 200 ? r.text.slice(0, 200) + '...' : r.text}
+                  </div>
+                  <div style={styles.searchResultTime}>{formatTime(r.start)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <section style={styles.section}>
           <h2 style={styles.sectionTitle}>
             Recent Meetings ({completedRecordings.length + failedRecordings.length})
           </h2>
+          {allTags.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+              <span
+                style={{
+                  ...styles.filterChip,
+                  background: !selectedTag ? '#1a73e8' : '#f0f0f0',
+                  color: !selectedTag ? '#fff' : '#333',
+                }}
+                onClick={() => setSelectedTag(null)}
+              >
+                All
+              </span>
+              {allTags.map(tag => (
+                <span
+                  key={tag}
+                  style={{
+                    ...styles.filterChip,
+                    background: selectedTag === tag ? '#1a73e8' : '#f0f0f0',
+                    color: selectedTag === tag ? '#fff' : '#333',
+                  }}
+                  onClick={() => setSelectedTag(tag)}
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
           {isLoading && <p>Loading...</p>}
           {!isLoading && meetings.length === 0 && (
             <p style={styles.emptyState}>No meetings yet. Start a recording above!</p>
           )}
           <div style={styles.meetingList}>
-            {meetings.map(meeting => (
+            {meetings
+              .filter(m => !selectedTag || m.tags?.includes(selectedTag))
+              .map(meeting => (
               <div key={meeting.id} style={styles.meetingCard}>
-                <div style={styles.meetingInfo} onClick={() => {
-                  if (meeting.status === 'completed') {
-                    onNavigate({ page: 'meeting', id: meeting.id })
-                  }
-                }}>
-                  <h3 style={styles.meetingTitle}>{meeting.title}</h3>
-                  <div style={styles.meetingMeta}>
-                    <span>{formatDate(meeting.createdAt)}</span>
-                    <span>{Math.round(meeting.duration)}s</span>
-                    <span style={{
-                      ...styles.statusBadge,
-                      background: meeting.status === 'completed' ? '#27ae60' :
-                                  meeting.status === 'processing' ? '#f39c12' :
-                                  meeting.status === 'failed' ? '#e74c3c' : '#3498db'
-                    }}>
-                      {meeting.status}
-                    </span>
-                    {meeting.status === 'completed' && (
-                      <span>{meeting.segments.length} segments</span>
+                  <div style={styles.meetingInfo} onClick={() => {
+                    if (meeting.status === 'completed') {
+                      onNavigate({ page: 'meeting', id: meeting.id })
+                    }
+                  }}>
+                    <h3 style={styles.meetingTitle}>{meeting.title}</h3>
+                    <div style={styles.meetingMeta}>
+                      <span>{formatDate(meeting.createdAt)}</span>
+                      <span>{Math.round(meeting.duration)}s</span>
+                      <span style={{
+                        ...styles.statusBadge,
+                        background: meeting.status === 'completed' ? '#27ae60' :
+                                    meeting.status === 'processing' ? '#f39c12' :
+                                    meeting.status === 'failed' ? '#e74c3c' : '#3498db'
+                      }}>
+                        {meeting.status}
+                      </span>
+                      {meeting.status === 'completed' && (
+                        <span>{meeting.segments.length} segments</span>
+                      )}
+                    </div>
+                    {meeting.tags && meeting.tags.length > 0 && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+                        {meeting.tags.map(tag => (
+                          <span key={tag} style={styles.tagBadge}>{tag}</span>
+                        ))}
+                      </div>
                     )}
                   </div>
-                </div>
                 <div style={styles.meetingActions}>
                   {meeting.status === 'recorded' && (
                     <button
@@ -383,5 +498,19 @@ const styles: Record<string, React.CSSProperties> = {
   statusBadge: { padding: '2px 8px', borderRadius: 10, color: '#fff', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' },
   meetingActions: { display: 'flex', gap: 6, marginLeft: 12 },
   actionBtn: { padding: '6px 14px', background: '#3498db', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 },
-  dangerBtn: { padding: '6px 14px', background: '#fee', color: '#c0392b', border: '1px solid #f5c6cb', borderRadius: 4, cursor: 'pointer', fontSize: 12 }
+  dangerBtn: { padding: '6px 14px', background: '#fee', color: '#c0392b', border: '1px solid #f5c6cb', borderRadius: 4, cursor: 'pointer', fontSize: 12 },
+  tagBadge: { display: 'inline-block', padding: '1px 6px', background: '#e8f0fe', color: '#1a73e8', borderRadius: 8, fontSize: 10, fontWeight: 500 },
+  filterChip: { display: 'inline-block', padding: '4px 12px', borderRadius: 14, fontSize: 12, cursor: 'pointer', fontWeight: 500, userSelect: 'none', transition: 'all 0.15s' },
+  searchContainer: { position: 'relative', marginBottom: 16 },
+  searchInputWrapper: { display: 'flex', alignItems: 'center', background: '#fff', border: '1px solid #ddd', borderRadius: 8, padding: '0 12px' },
+  searchIcon: { fontSize: 14, color: '#999', marginRight: 8 },
+  searchInput: { flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: 14, background: 'transparent' },
+  searchClearBtn: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: '#999', padding: '4px 8px' },
+  searchSpinner: { fontSize: 12, color: '#999', marginLeft: 4 },
+  searchResultsDropdown: { position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #ddd', borderRadius: 8, marginTop: 4, maxHeight: 360, overflowY: 'auto', zIndex: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' },
+  searchResultItem: { padding: 12, borderBottom: '1px solid #f0f0f0', cursor: 'pointer', transition: 'background 0.15s' },
+  searchResultTitle: { fontWeight: 600, fontSize: 13, color: '#1a73e8' },
+  searchResultSpeaker: { fontSize: 12, color: '#666', marginTop: 2 },
+  searchResultText: { fontSize: 13, color: '#333', marginTop: 4, lineHeight: 1.4 },
+  searchResultTime: { fontSize: 11, color: '#999', marginTop: 2 }
 }

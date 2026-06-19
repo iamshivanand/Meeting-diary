@@ -1,4 +1,5 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
+import * as fs from 'fs/promises'
 import { join } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { v4 as uuid } from 'uuid'
@@ -8,6 +9,68 @@ import type { AudioRecorder } from '../audio/AudioRecorder'
 import type { MeetingStore } from '../store/MeetingStore'
 import type { SettingsStore } from '../store/SettingsStore'
 import type { Meeting, MeetingSegment, Speaker, AIProvider } from '../../shared/types'
+
+function formatSRTTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  const ms = Math.floor((seconds % 1) * 1000)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`
+}
+
+function formatTimestamp(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+function exportSRT(meeting: any): string {
+  if (!meeting.segments || meeting.segments.length === 0) return ''
+  return meeting.segments.map((seg: any, i: number) => {
+    const start = formatSRTTime(seg.start || 0)
+    const end = formatSRTTime(seg.end || 0)
+    return `${i + 1}\n${start} --> ${end}\n${seg.speakerLabel || seg.speakerId ? (seg.speakerLabel || seg.speakerId) + ': ' : ''}${seg.text}\n`
+  }).join('\n')
+}
+
+function exportMarkdown(meeting: any): string {
+  let md = `# ${meeting.title}\n\n`
+  md += `**Date:** ${new Date(meeting.createdAt).toLocaleString()}\n`
+  md += `**Duration:** ${Math.round((meeting.duration || 0) / 60)} minutes\n\n`
+  md += `---\n\n`
+  if (meeting.segments) {
+    for (const seg of meeting.segments) {
+      const speaker = seg.speakerLabel || seg.speakerId || 'Unknown'
+      const time = formatTimestamp(seg.start || 0)
+      md += `**${speaker}** _(${time})_\n> ${seg.text}\n\n`
+    }
+  }
+  return md
+}
+
+function exportJSON(meeting: any): string {
+  return JSON.stringify({
+    title: meeting.title,
+    date: meeting.createdAt,
+    duration: meeting.duration,
+    speakers: meeting.speakers,
+    segments: meeting.segments,
+  }, null, 2)
+}
+
+function exportTXT(meeting: any): string {
+  let txt = `${meeting.title}\n${'='.repeat(meeting.title.length)}\n`
+  const d = new Date(meeting.createdAt).toLocaleString()
+  txt += `Date: ${d}\n\n`
+  if (meeting.segments) {
+    for (const seg of meeting.segments) {
+      const speaker = seg.speakerLabel || seg.speakerId || 'Unknown'
+      const time = formatTimestamp(seg.start || 0)
+      txt += `[${time}] ${speaker}: ${seg.text}\n`
+    }
+  }
+  return txt
+}
 
 interface HandlerDeps {
   mainWindow: BrowserWindow | null
@@ -32,6 +95,7 @@ export class IPCHandlers {
     this.registerAIHandlers()
     this.registerModelHandlers()
     this.registerBrowserRecordingHandlers()
+    this.registerSearchAndExportHandlers()
     this.setupProgressForwarding()
   }
 
@@ -63,6 +127,18 @@ export class IPCHandlers {
 
     ipcMain.handle('meetings:export', async (_e, meetingId: string, format: any) => {
       return this.handleExport(meetingId, format)
+    })
+
+    ipcMain.handle('update-meeting-tags', async (_e, { id, tags }: { id: string; tags: string[] }) => {
+      return this.deps.meetingStore.updateMeetingTags(id, tags)
+    })
+
+    ipcMain.handle('get-all-tags', async () => {
+      return this.deps.meetingStore.getAllTags()
+    })
+
+    ipcMain.handle('get-meetings-by-tag', async (_e, tag: string) => {
+      return this.deps.meetingStore.getMeetingsByTag(tag)
     })
   }
 
@@ -222,6 +298,67 @@ export class IPCHandlers {
 
     ipcMain.handle('ai:segment-topics', async (_e, meetingId: string) => {
       return this.handleAIAction(meetingId, 'segment-topics')
+    })
+  }
+
+  private registerSearchAndExportHandlers(): void {
+    ipcMain.handle('search-transcripts', async (_event, query: string, limit?: number) => {
+      return this.deps.meetingStore.searchTranscripts(query, limit)
+    })
+
+    ipcMain.handle('get-all-meeting-titles', async () => {
+      return this.deps.meetingStore.getAllMeetingTitles()
+    })
+
+    ipcMain.handle('export-transcript', async (_event, { meeting, format }: { meeting: any; format: string }) => {
+      const filters: Record<string, Electron.FileFilter[]> = {
+        srt: [{ name: 'SubRip Subtitle', extensions: ['srt'] }],
+        md: [{ name: 'Markdown', extensions: ['md'] }],
+        json: [{ name: 'JSON', extensions: ['json'] }],
+        txt: [{ name: 'Plain Text', extensions: ['txt'] }],
+        docx: [{ name: 'Word Document', extensions: ['docx'] }],
+      }
+
+      const defaultExt = format === 'docx' ? 'docx' : format
+      const result = await dialog.showSaveDialog({
+        title: 'Export Transcript',
+        defaultPath: `${meeting.title}.${defaultExt}`,
+        filters: filters[format] || filters.txt,
+      })
+
+      if (result.canceled || !result.filePath) return null
+
+      switch (format) {
+        case 'srt': {
+          const content = exportSRT(meeting)
+          await fs.writeFile(result.filePath, content, 'utf-8')
+          break
+        }
+        case 'md': {
+          const content = exportMarkdown(meeting)
+          await fs.writeFile(result.filePath, content, 'utf-8')
+          break
+        }
+        case 'json': {
+          const content = exportJSON(meeting)
+          await fs.writeFile(result.filePath, content, 'utf-8')
+          break
+        }
+        case 'txt': {
+          const content = exportTXT(meeting)
+          await fs.writeFile(result.filePath, content, 'utf-8')
+          break
+        }
+        case 'docx': {
+          const buf = await this.generateDocx(meeting)
+          await fs.writeFile(result.filePath, buf)
+          break
+        }
+        default:
+          throw new Error(`Unsupported export format: ${format}`)
+      }
+
+      return result.filePath
     })
   }
 
@@ -397,16 +534,24 @@ export class IPCHandlers {
     const model = typeof provider.config?.model === 'string' ? provider.config.model : 'llama3.2:3b'
 
     try {
-      const response = await fetch(`${host}/api/generate`, {
+      const response = await fetch(`${host}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt, stream: false, options: { num_predict: 4096 } }),
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: 'You are a meeting analysis assistant. Provide concise, structured analysis.' },
+            { role: 'user', content: prompt }
+          ],
+          stream: false,
+          options: { num_predict: 4096 }
+        }),
         signal: AbortSignal.timeout(120000)
       })
 
       if (!response.ok) throw new Error(`Ollama error: ${response.status}`)
       const data: any = await response.json()
-      return data.response || 'No response from Ollama'
+      return data.message?.content || 'No response from Ollama'
     } catch (err: any) {
       return `Failed to connect to Ollama at ${host}. Make sure Ollama is running.\nError: ${err.message}`
     }

@@ -1,3 +1,5 @@
+import type { SearchResult } from '@shared/types'
+
 export interface ElectronAPI {
   app: {
     getVersion: () => Promise<string>
@@ -26,6 +28,8 @@ export interface ElectronAPI {
     stopRecording: (meetingId: string) => Promise<{ audioPath: string; duration: number }>
     processRecording: (meetingId: string, options?: any) => Promise<any>
     export: (meetingId: string, format: any) => Promise<string>
+    updateMeetingTags: (id: string, tags: string[]) => Promise<void>
+    getAllTags: () => Promise<string[]>
   }
   recording: {
     onStatusChange: (callback: (status: any) => void) => () => void
@@ -54,6 +58,10 @@ export interface ElectronAPI {
     extractDecisions: (meetingId: string) => Promise<string>
     segmentTopics: (meetingId: string) => Promise<string>
   }
+
+  searchTranscripts: (query: string, limit?: number) => Promise<SearchResult[]>
+  getAllMeetingTitles: () => Promise<Array<{id: string, title: string, date: string}>>
+  exportTranscript: (meeting: any, format: string) => Promise<string | null>
 }
 
 declare global {

@@ -86,6 +86,8 @@ export function SettingsPage({ onBack }: Props) {
     setTestResult(result)
   }
 
+  const ollamaModels = ['llama3.2:latest', 'llama3.1:latest', 'mistral:latest', 'mixtral:latest', 'phi3:latest', 'qwen2.5:latest']
+
   const availableModels: Record<string, string[]> = {
     openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     anthropic: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
@@ -178,24 +180,47 @@ export function SettingsPage({ onBack }: Props) {
                     </div>
 
                     {localSettings.ai.provider.type === 'ollama' ? (
-                      <div style={styles.field}>
-                        <label style={styles.label}>Ollama Host</label>
-                        <input
-                          style={styles.input}
-                          value={(localSettings.ai.provider.config?.host as string) || 'http://localhost:11434'}
-                          onChange={e => {
-                            const config = { ...localSettings.ai.provider.config, host: e.target.value }
-                            setLocalSettings({
-                              ...localSettings,
-                              ai: {
-                                ...localSettings.ai,
-                                provider: { ...localSettings.ai.provider, config }
-                              }
-                            })
-                          }}
-                          placeholder="http://localhost:11434"
-                        />
-                      </div>
+                      <>
+                        <div style={styles.field}>
+                          <label style={styles.label}>Ollama Host</label>
+                          <input
+                            style={styles.input}
+                            value={(localSettings.ai.provider.config?.host as string) || 'http://localhost:11434'}
+                            onChange={e => {
+                              const config = { ...localSettings.ai.provider.config, host: e.target.value }
+                              setLocalSettings({
+                                ...localSettings,
+                                ai: {
+                                  ...localSettings.ai,
+                                  provider: { ...localSettings.ai.provider, config }
+                                }
+                              })
+                            }}
+                            placeholder="http://localhost:11434"
+                          />
+                        </div>
+                        <div style={styles.field}>
+                          <label style={styles.label}>Model</label>
+                          <select
+                            style={styles.select}
+                            value={(localSettings.ai.provider.config?.model as string) || 'llama3.2:latest'}
+                            onChange={e => {
+                              const config = { ...localSettings.ai.provider.config, model: e.target.value }
+                              setLocalSettings({
+                                ...localSettings,
+                                ai: { ...localSettings.ai, provider: { ...localSettings.ai.provider, config } }
+                              })
+                            }}
+                          >
+                            {ollamaModels.map(m => (
+                              <option key={m} value={m}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ ...styles.field, fontSize: 12, color: '#888' }}>
+                          Requires Ollama to be running locally (<a href="#" onClick={e => { e.preventDefault(); window.api.app.openExternal('https://ollama.ai') }}>ollama.ai</a>)
+                        </div>
+                      </>
                     ) : (
                       <>
                         <div style={styles.field}>

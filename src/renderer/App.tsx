@@ -1,9 +1,16 @@
-import React, { useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { useAppStore } from './store/appStore'
-import { DashboardPage } from './pages/DashboardPage'
-import { MeetingViewPage } from './pages/MeetingViewPage'
-import { SettingsPage } from './pages/SettingsPage'
 import { UpdateNotifier } from './components/UpdateNotifier'
+
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const MeetingViewPage = lazy(() => import('./pages/MeetingViewPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+
+const PageLoader = () => (
+  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: '#888' }}>
+    Loading...
+  </div>
+)
 
 type Route = { page: 'dashboard' } | { page: 'meeting'; id: string } | { page: 'settings' }
 
@@ -180,9 +187,11 @@ export function App() {
     <>
       <RecordingBar />
       <ModelDownloadBanner />
-      {route.page === 'dashboard' && <DashboardPage onNavigate={setRoute} />}
-      {route.page === 'meeting' && <MeetingViewPage meetingId={route.id} onBack={() => setRoute({ page: 'dashboard' })} />}
-      {route.page === 'settings' && <SettingsPage onBack={() => setRoute({ page: 'dashboard' })} />}
+      <Suspense fallback={<PageLoader />}>
+        {route.page === 'dashboard' && <DashboardPage onNavigate={setRoute} />}
+        {route.page === 'meeting' && <MeetingViewPage meetingId={route.id} onBack={() => setRoute({ page: 'dashboard' })} />}
+        {route.page === 'settings' && <SettingsPage onBack={() => setRoute({ page: 'dashboard' })} />}
+      </Suspense>
       <UpdateNotifier />
     </>
   )
