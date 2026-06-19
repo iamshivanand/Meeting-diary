@@ -235,6 +235,13 @@ export interface RecordingStatus {
   channels: number
 }
 
+export interface ModelDownloadProgress {
+  stage: 'downloading' | 'extracting' | 'done' | 'error';
+  model: string;
+  percent: number;
+  message: string;
+}
+
 export interface SidecarRequest {
   id: string
   method: string

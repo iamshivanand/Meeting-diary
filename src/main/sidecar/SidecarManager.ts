@@ -32,6 +32,13 @@ export interface ProcessingProgress {
   error?: string
 }
 
+export interface ModelDownloadProgress {
+  stage: 'downloading' | 'extracting' | 'done' | 'error'
+  model: string
+  percent: number
+  message: string
+}
+
 export class SidecarManager extends EventEmitter {
   private process: ChildProcess | null = null
   private pendingRequests = new Map<string, PendingRequest>()
@@ -154,6 +161,18 @@ export class SidecarManager extends EventEmitter {
     }
   }
 
+  async downloadModels(onProgress: (progress: ModelDownloadProgress) => void): Promise<void> {
+    const onEvent = (progress: ModelDownloadProgress) => {
+      onProgress(progress)
+    }
+    this.on('model-download-progress', onEvent)
+    try {
+      await this.request('download_models', {})
+    } finally {
+      this.off('model-download-progress', onEvent)
+    }
+  }
+
   async stop(): Promise<void> {
     if (!this.process) return
     try {
@@ -183,6 +202,8 @@ export class SidecarManager extends EventEmitter {
       }
     } else if (msg.method === 'progress') {
       this.emit('progress', msg.params as ProcessingProgress)
+    } else if (msg.method === 'model_download_progress') {
+      this.emit('model-download-progress', msg.params as ModelDownloadProgress)
     } else if (msg.method === 'log') {
       this.emit('log', msg.params)
     }

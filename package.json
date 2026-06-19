@@ -28,6 +28,7 @@
   "dependencies": {
     "docx": "^9.7.1",
     "electron-store": "^8.1.0",
+    "electron-updater": "^6.8.9",
     "eventemitter3": "^5.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -76,6 +77,12 @@
         ]
       }
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "iamshivanand",
+      "repo": "Meeting-diary",
+      "releaseType": "release"
+    },
     "win": {
       "target": [
         "nsis",
@@ -83,7 +90,8 @@
       ],
       "icon": "resources/icons/icon.png",
       "signDlls": false,
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "publish": ["github"]
     },
     "mac": {
       "target": [

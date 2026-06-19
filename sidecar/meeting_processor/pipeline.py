@@ -318,6 +318,46 @@ class MeetingProcessor:
             return "cuda" if torch.cuda.is_available() else "cpu"
         return device
 
+    def download_models(self, progress_callback: Optional[Callable] = None):
+        """Download all required ML models proactively. After this, initialize() is a no-op."""
+        cb = progress_callback or self._default_progress
+        device = self._detect_device("auto")
+
+        cb({"stage": "downloading", "model": "faster-whisper", "percent": 0, "message": "Downloading Whisper large-v3-turbo..."})
+        from faster_whisper import WhisperModel
+        import torch
+        compute_type = "int8_float16" if device == "cuda" else "int8"
+        self.transcriber = WhisperModel(
+            model_size_or_path="large-v3-turbo",
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=4 if device == "cpu" else None,
+            num_workers=2
+        )
+        cb({"stage": "done", "model": "faster-whisper", "percent": 100, "message": "Whisper model ready"})
+
+        cb({"stage": "downloading", "model": "pyannote-embedding", "percent": 0, "message": "Downloading VAD/embedding model..."})
+        from pyannote.audio import Inference
+        self.vad_model = Inference("pyannote/voice-activity-detection", device=torch.device(device))
+        cb({"stage": "done", "model": "pyannote-embedding", "percent": 100, "message": "VAD model ready"})
+
+        cb({"stage": "downloading", "model": "pyannote-segmentation", "percent": 0, "message": "Downloading diarization model..."})
+        try:
+            from pyannote.audio import Pipeline
+            self.diarizer = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-community-1",
+                use_auth_token=None
+            ).to(torch.device(device))
+        except Exception:
+            from pyannote.audio import Pipeline
+            self.diarizer = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=None
+            ).to(torch.device(device))
+        cb({"stage": "done", "model": "pyannote-segmentation", "percent": 100, "message": "Diarization model ready"})
+
+        cb({"stage": "done", "model": "all", "percent": 100, "message": "All models ready"})
+
     def _report_progress(self, stage: str, progress: int, message: str):
         if self.progress_callback:
             self.progress_callback({"stage": stage, "progress": progress, "message": message})

@@ -5,6 +5,12 @@ export interface ElectronAPI {
     showSaveDialog: (options: any) => Promise<{ canceled: boolean; filePath?: string }>
     showOpenDialog: (options: any) => Promise<{ canceled: boolean; filePaths?: string[] }>
   }
+
+  onShortcut: (callback: (action: string) => void) => () => void
+  onUpdateStatus: (callback: (status: any) => void) => () => void
+  checkForUpdates: () => Promise<void>
+  downloadUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
   meetings: {
     list: () => Promise<any[]>
     get: (id: string) => Promise<any | null>

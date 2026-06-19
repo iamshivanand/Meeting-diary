@@ -8,6 +8,21 @@ const api = {
     showOpenDialog: (options: any) => ipcRenderer.invoke('app:show-open-dialog', options)
   },
 
+  onShortcut: (callback: (action: string) => void) => {
+    const handler = (_e: any, action: string) => callback(action)
+    ipcRenderer.on('shortcut', handler)
+    return () => ipcRenderer.removeListener('shortcut', handler)
+  },
+
+  onUpdateStatus: (callback: (status: any) => void) => {
+    const handler = (_e: any, status: any) => callback(status)
+    ipcRenderer.on('update-status', handler)
+    return () => ipcRenderer.removeListener('update-status', handler)
+  },
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+
   meetings: {
     list: () => ipcRenderer.invoke('meetings:list'),
     get: (id: string) => ipcRenderer.invoke('meetings:get', id),
@@ -66,6 +81,16 @@ const api = {
     extractActions: (meetingId: string) => ipcRenderer.invoke('ai:extract-actions', meetingId),
     extractDecisions: (meetingId: string) => ipcRenderer.invoke('ai:extract-decisions', meetingId),
     segmentTopics: (meetingId: string) => ipcRenderer.invoke('ai:segment-topics', meetingId)
+  },
+
+  models: {
+    check: () => ipcRenderer.invoke('check-models'),
+    download: () => ipcRenderer.invoke('download-models'),
+    onModelDownloadProgress: (callback: (progress: any) => void) => {
+      const handler = (_e: any, progress: any) => callback(progress)
+      ipcRenderer.on('model-download-progress', handler)
+      return () => ipcRenderer.removeListener('model-download-progress', handler)
+    }
   }
 }
 

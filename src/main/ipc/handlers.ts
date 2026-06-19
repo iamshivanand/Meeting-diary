@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { v4 as uuid } from 'uuid'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx'
-import type { SidecarManager } from '../sidecar/SidecarManager'
+import type { SidecarManager, ModelDownloadProgress } from '../sidecar/SidecarManager'
 import type { AudioRecorder } from '../audio/AudioRecorder'
 import type { MeetingStore } from '../store/MeetingStore'
 import type { SettingsStore } from '../store/SettingsStore'
@@ -30,6 +30,7 @@ export class IPCHandlers {
     this.registerSpeakerHandlers()
     this.registerSettingsHandlers()
     this.registerAIHandlers()
+    this.registerModelHandlers()
     this.setupProgressForwarding()
   }
 
@@ -196,6 +197,27 @@ export class IPCHandlers {
 
     ipcMain.handle('ai:segment-topics', async (_e, meetingId: string) => {
       return this.handleAIAction(meetingId, 'segment-topics')
+    })
+  }
+
+  private registerModelHandlers(): void {
+    ipcMain.handle('download-models', async (event) => {
+      const win = this.deps.mainWindow
+      await this.deps.sidecarManager.downloadModels((progress) => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download-progress', progress)
+        }
+      })
+      return { status: 'done' }
+    })
+
+    ipcMain.handle('check-models', async () => {
+      try {
+        const result = await this.deps.sidecarManager.request('check_models', {})
+        return result as { downloaded: boolean }
+      } catch {
+        return { downloaded: false }
+      }
     })
   }
 

@@ -1,5 +1,14 @@
 import { create } from 'zustand'
-import type { Meeting, Settings, Speaker, AIProvider, RecordingStatus, ProcessingProgress } from '@shared/types'
+import type { Meeting, Settings, Speaker, AIProvider, RecordingStatus, ProcessingProgress, ModelDownloadProgress } from '@shared/types'
+
+type UpdateStatus = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded'
+
+interface UpdateProgress {
+  percent: number
+  bytesPerSecond: number
+  total: number
+  transferred: number
+}
 
 interface AppState {
   meetings: Meeting[]
@@ -7,6 +16,11 @@ interface AppState {
   settings: Settings | null
   recordingStatus: RecordingStatus
   processingProgress: ProcessingProgress | null
+  modelDownloadStatus: 'idle' | 'downloading' | 'done' | 'error'
+  modelDownloadProgress: ModelDownloadProgress | null
+  updateStatus: UpdateStatus
+  updateInfo: any
+  updateProgress: UpdateProgress | null
   isLoading: boolean
   error: string | null
 
@@ -15,6 +29,11 @@ interface AppState {
   setSettings: (settings: Settings) => void
   setRecordingStatus: (status: RecordingStatus) => void
   setProcessingProgress: (progress: ProcessingProgress | null) => void
+  setModelDownloadStatus: (status: 'idle' | 'downloading' | 'done' | 'error') => void
+  setModelDownloadProgress: (progress: ModelDownloadProgress | null) => void
+  setUpdateStatus: (status: UpdateStatus) => void
+  setUpdateInfo: (info: any) => void
+  setUpdateProgress: (progress: UpdateProgress | null) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
 
@@ -30,6 +49,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   settings: null,
   recordingStatus: { state: 'idle', duration: 0, audioLevel: 0, fileSize: 0, sampleRate: 16000, channels: 1 },
   processingProgress: null,
+  modelDownloadStatus: 'idle',
+  modelDownloadProgress: null,
+  updateStatus: 'idle',
+  updateInfo: null,
+  updateProgress: null,
   isLoading: false,
   error: null,
 
@@ -38,6 +62,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSettings: (settings) => set({ settings }),
   setRecordingStatus: (status) => set({ recordingStatus: status }),
   setProcessingProgress: (progress) => set({ processingProgress: progress }),
+  setModelDownloadStatus: (status) => set({ modelDownloadStatus: status }),
+  setModelDownloadProgress: (progress) => set({ modelDownloadProgress: progress }),
+  setUpdateStatus: (status) => set({ updateStatus: status }),
+  setUpdateInfo: (info) => set({ updateInfo: info }),
+  setUpdateProgress: (progress) => set({ updateProgress: progress }),
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
 

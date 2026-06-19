@@ -115,9 +115,26 @@ class SidecarServer:
     def handle_suggest_speaker_labels(self, embeddings_map: dict, threshold: float = 0.65) -> dict:
         return self.registry.suggest_labels(embeddings_map, threshold)
 
+    def handle_download_models(self) -> Dict[str, Any]:
+        if self.processor is None:
+            self.processor = MeetingProcessor(progress_callback=self._progress_callback)
+        self.processor.download_models(progress_callback=self._model_download_callback)
+        return {"status": "done"}
+
+    def handle_check_models(self) -> Dict[str, Any]:
+        return {"downloaded": self.processor is not None and self.processor.transcriber is not None}
+
     def handle_shutdown(self) -> str:
         self.running = False
         return "shutting_down"
+
+    def _send_notification(self, method: str, params: Dict[str, Any]):
+        msg = json.dumps({"method": method, "params": params})
+        sys.stdout.write(msg + "\n")
+        sys.stdout.flush()
+
+    def _model_download_callback(self, data: Dict[str, Any]):
+        self._send_notification("model_download_progress", data)
 
     def _progress_callback(self, data: Dict[str, Any]):
         msg = json.dumps({"method": "progress", "params": data})

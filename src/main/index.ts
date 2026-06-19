@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } from 'electron'
 import { join } from 'path'
 import { SidecarManager } from './sidecar/SidecarManager'
 import { AudioRecorder } from './audio/AudioRecorder'
@@ -6,6 +6,7 @@ import { SettingsStore } from './store/SettingsStore'
 import { MeetingStore } from './store/MeetingStore'
 import { IPCHandlers } from './ipc/handlers'
 import { NativeModuleLoader } from './native/NativeModuleLoader'
+import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
 let sidecarManager: SidecarManager
@@ -13,6 +14,7 @@ let audioRecorder: AudioRecorder
 let settingsStore: SettingsStore
 let meetingStore: MeetingStore
 let ipcHandlers: IPCHandlers
+let modelsDownloaded = false
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -83,10 +85,103 @@ app.whenReady().then(async () => {
   try {
     await initializeApp()
     await createWindow()
+
+    // --- Keyboard Shortcuts ---
+    // CmdOrCtrl+Shift+R - Start/Stop recording (toggle)
+    // CmdOrCtrl+Shift+D - Navigate to Dashboard
+    // CmdOrCtrl+Shift+S - Navigate to Settings
+    // CmdOrCtrl+Shift+E - Open most recent meeting
+    globalShortcut.register('CmdOrCtrl+Shift+R', () => {
+      mainWindow?.webContents.send('shortcut', 'toggle-recording')
+    })
+    globalShortcut.register('CmdOrCtrl+Shift+D', () => {
+      mainWindow?.webContents.send('shortcut', 'navigate-dashboard')
+    })
+    globalShortcut.register('CmdOrCtrl+Shift+S', () => {
+      mainWindow?.webContents.send('shortcut', 'navigate-settings')
+    })
+    globalShortcut.register('CmdOrCtrl+Shift+E', () => {
+      mainWindow?.webContents.send('shortcut', 'open-latest-meeting')
+    })
+
+    // --- Auto-Updater ---
+    if (app.isPackaged) {
+      autoUpdater.autoDownload = false
+      autoUpdater.autoInstallOnAppQuit = true
+
+      autoUpdater.on('checking-for-update', () => {
+        mainWindow?.webContents.send('update-status', { status: 'checking' })
+      })
+      autoUpdater.on('update-available', (info) => {
+        mainWindow?.webContents.send('update-status', { status: 'available', info })
+      })
+      autoUpdater.on('update-not-available', () => {
+        mainWindow?.webContents.send('update-status', { status: 'not-available' })
+      })
+      autoUpdater.on('download-progress', (progress) => {
+        mainWindow?.webContents.send('update-status', { status: 'downloading', progress })
+      })
+      autoUpdater.on('update-downloaded', () => {
+        mainWindow?.webContents.send('update-status', { status: 'downloaded' })
+      })
+
+      ipcMain.handle('check-for-updates', () => {
+        autoUpdater.checkForUpdates()
+      })
+      ipcMain.handle('download-update', () => {
+        autoUpdater.downloadUpdate()
+      })
+      ipcMain.handle('install-update', () => {
+        autoUpdater.quitAndInstall()
+      })
+
+      setTimeout(() => {
+        autoUpdater.checkForUpdates()
+      }, 5000)
+    }
+
+    // Auto-download ML models on first launch
+    autoDownloadModels()
   } catch (err) {
     console.error('Failed to initialize app:', err)
   }
 })
+
+async function autoDownloadModels() {
+  try {
+    const checkResult = await sidecarManager.request('check_models', {}) as { downloaded: boolean }
+    if (checkResult.downloaded) {
+      modelsDownloaded = true
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('model-download-progress', {
+          stage: 'done', model: 'all', percent: 100, message: 'All models ready'
+        })
+      }
+      return
+    }
+  } catch {
+    // Sidecar not ready, models not downloaded — proceed to download
+  }
+
+  try {
+    await sidecarManager.downloadModels((progress) => {
+      if (progress.stage === 'done' && progress.model === 'all') {
+        modelsDownloaded = true
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('model-download-progress', progress)
+      }
+    })
+    modelsDownloaded = true
+  } catch (err) {
+    console.error('Model download failed:', err)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('model-download-progress', {
+        stage: 'error', model: 'all', percent: 0, message: String(err)
+      })
+    }
+  }
+}
 
 async function cleanup() {
   try { await sidecarManager?.stop() } catch {}
@@ -95,6 +190,10 @@ async function cleanup() {
 
 app.on('before-quit', async () => {
   await cleanup()
+})
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
 })
 
 app.on('window-all-closed', async () => {
